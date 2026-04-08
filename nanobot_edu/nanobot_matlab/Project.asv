@@ -1,0 +1,279 @@
+%% Setup %%
+
+clc
+clear all
+nb = nanobot('/dev/cu.usbmodem1101', 115200, 'serial');
+
+%% PID Loops %%
+% Setup gain variables
+% Initialize integral, previous error, and previous time terms
+% Initialize or perform calculations for targets/values your loop will be working with
+% tic
+% small delay to prevent toc from blowing up derivative term on first loop
+
+% begin while
+	% calculate dt based on toc and previous time
+	% update previous time
+	% take reading of data
+	% Perform conditional checking whether we want to exit the loop (e.g. read all black on reflectance array during line following)
+		% exit the loop if so, and perform any needed end behaviors (e.g. setting motors to zero)
+	% calculate error term
+	% use error to calculate/update integral and derivative terms
+	% calculate control signal based on error, integral, and derivative
+	% update previous error
+	% calculate desired setpoint quantities from control signal
+	% apply limits to setpoints if needed
+	% apply setpoint to plant (e.g. setting duty cycle for motors)
+
+minVals = [70,70,70,70,70,70]; % Set me to min reflectance 
+maxVals = [900,900,900,900,900,900]; % Set me to max reflectance 
+
+% First initialize the reflectance array.
+nb.initReflectance();
+
+% Get an initial reading
+vals = nb.reflectanceRead();
+
+% Set the motor offset factor (use the value you found earlier)
+mOffScale = 1.2; % Start with 1 so both motors have same duty cycle.
+
+% TUNING:
+% Start very small. (Using reflectance values, the calculated error can  
+% range from zero to several thousand! Think about what coefficient you 
+% want multiplying by values that could get up to a thousand or so.)
+kp = 7;
+ki = 0;
+kd = 0.6;
+
+% Basic initialization
+vals = 0;
+prevError = 0;
+prevTime = 0;
+integral = 0;
+derivative = 0;
+
+% Determine a threshold to detect when white is detected 
+% (choose a value that will be used as a threshold by all sensors to know 
+% if the robot has lost the line)
+whiteThresh = 200; % Max value detected for all white
+blackThresh = 700;
+
+% The base duty cycle "speed" you wish to travel down the line 
+% (recommended value is 9)
+motorBaseSpeed = 9;
+
+tic % start time
+
+% Use a higher duty cycle for a very brief moment to overcome the gearbox 
+% force of static friction 
+% (recommendation: 10, with mOffScale if needed)
+nb.setMotor(1, -mOffScale * 10);
+nb.setMotor(2, 10);
+pause(0.03);
+
+while (toc < 99)  % Adjust me if you want to stop your line following 
+                 % earlier or let it run longer.
+
+    % TIME STEP
+    dt = toc - prevTime; % find the amount of time that has elapsed
+
+    prevTime = toc; % set the current time to the previous time in the 
+                    % next time step
+
+    % take a reading                
+    vals = nb.reflectanceRead()
+
+    % change from a struct to a list for convenience
+    vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
+    
+    % Calibrate sensor readings
+    calibratedVals = zeros(1,6); % initialize to zero
+    for i = 1:6
+        calibratedVals(i) = (vals(i) - minVals(i))/(maxVals(i) - minVals(i));
+        % overwrite the calculated calibrated values if get a reading below 
+        % or above our set minVals (white) or maxVals (black), respectively
+        if vals(i) < minVals(i) 
+            calibratedVals(i) = 0;
+        end
+        if vals(i) > maxVals(i) 
+            calibratedVals(i) = maxVals(i);
+        end
+    end
+
+    % Calculate the three errors to be used in the PID control 
+    
+    error = sum([-3 -2 -1 1 2 3] .* calibratedVals) / sum(calibratedVals); 
+    integral = integral + error * dt;
+    derivative = (error - prevError) / dt;
+
+    % Create your PID controller output here using the previously defined 
+    % gain values and the three errors computed above. 
+    control = kp * error + ki * integral + kd * derivative;
+
+    % STATE CHECKING 
+    if (vals(1) < whiteThresh && ...
+            vals(2) < whiteThresh && ...
+            vals(3) < whiteThresh && ...
+            vals(4) < whiteThresh && ...
+            vals(5) < whiteThresh && ...
+            vals(6) < whiteThresh)
+
+        % ALL SENSORS READ WHITE (lost tracking):
+            nb.setMotor(1, 11);
+            nb.setMotor(2, 11);
+
+    elseif (vals(1) > blackThresh && ...
+            vals(2) > blackThresh && ...
+            vals(3) > blackThresh && ...
+            vals(4) > blackThresh && ...
+            vals(5) > blackThresh && ...
+            vals(6) > blackThresh)
+     
+
+            centered = [vals(1)+vals(6),vals(2)+vals(5),vals(3)+vals(4)]
+
+            tic; % Start the timer
+            while toc < 2.4
+            nb.setMotor(1, 11);
+            nb.setMotor(2, 11);
+            increment=+1;
+            end
+            if (mean(centered)>1)
+            nb.setMotor(1, 11);
+            nb.setMotor(2, 11);
+            end
+
+    else
+
+        % LINE DETECTED:
+        % We want to travel at a fixed speed down the line and the control 
+        % should make minor adjustments that allow the robot to stay 
+        % centered on the line as it moves. These should be equations and
+        % not just numbers:
+        m1Duty = -(motorBaseSpeed + control)
+        m2Duty = mOffScale * (motorBaseSpeed - control)
+
+        nb.setMotor(1, m1Duty);
+        nb.setMotor(2, m2Duty);
+    end
+
+    prevError = error;
+end
+nb.setMotor(1, 0);
+nb.setMotor(2, 0);
+
+
+%% Gesture Classification %%
+% initialize variable to track whether we’ve given valid input
+% define list of possible output values, in the order that the network was trained on
+% while we haven’t given valid input
+	% perform gesture classification as we had done in labs 4 and 5 (outputs index of classified output according to the output value list)
+	% let user know what was gesture was classified as, and ask to verify
+	% perform gesture classification again
+	% check if the first gesture was verified according to the second gesture.
+		% if so, set valid input variable such that we exit the loop on the next iteration
+		% if not, proceed to the next iteration of the loop
+
+%% Line Following %%
+% Define a motor speed compensation factor if needed
+% Set up PID loop
+	% After reading data from the necessary sensors, you should check important states for the robot (e.g. reading all black, meaning a stop was encountered, or all white, meaning you lost the line) and handle them appropriately.
+	% Error should be calculated such that the robot seeks to center the reflectance array on the line
+	% The robot should move at a specified speed forward, and use the control signal adjust the speed to each motor to turn and keep itself on the line
+
+%% Wall Following %% 
+%(True distance-maintaining)
+% Set up PID loop
+	% Check for all black condition (made a complete circle)
+	% Calculate error as the difference between the distance you intend to follow and the measured ultrasonic distance
+	% Use prior values of error and/or motor setpoints/encoder rates to determine if the robot is reading a point in front of or behind it, and correct the control signal/motor setpoints accordingly to stabilize.
+
+%OR
+
+%% (Hacky solution)%% 
+% Move forward while reading sensors
+	% If reflectance is all black, exit loop
+	% if the side ultrasonic reading exceeds a certain value
+		% turn by a specified amount (or turn slowly, reading the ultrasonic until you read a new value greater than or equal to the current exceeded value), then proceed
+
+%% Odometry %% 
+%(Straight-line)
+% Set up PID loop
+	% Using measurements of wheel geometry, calculate the needed encoder counts that each motor needs to go
+	% Define a default speed for the robot to move at
+	% Calculate the error as being the difference between the motor encoder rates (either countspersec or counts divided by a measured dt)
+	% Keep track of the total number of encoder counts for one or both motors and exit the loop and stop the motors once you reach the number of encoder counts needed to travel a certain distance.
+		% Alternatively, you could just drive and continue until another condition is met (e.g. the RGB sensor reads red)
+
+%(Angular)
+% Set up PID loop
+	% Using measurements of wheel geometry, calculate the needed encoder counts that each motor needs to go
+	% Similarly to the straight line case, we can monitor the encoder counts/rates until we match the needed value, or come within a certain threshold of it.
+
+%% Helpers %%
+
+function One180()
+            
+            centered = [vals(1)+vals(6),vals(2)+vals(5),vals(3)+vals(4)]
+
+            tic; % Start the timer
+            while toc < 2.4
+            nb.setMotor(1, 9);
+            nb.setMotor(2, 9);
+            increment=+1;
+            end
+            if (mean(centered)>1)
+            nb.setMotor(1, 9);
+            nb.setMotor(2, 9);
+            end
+            nb.setMotor(1, 0);
+            nb.setMotor(2, 0);
+end
+
+
+%turnTillLine(): turns in place (center of mass doesn’t move) until the reflectance sensor reads a  line detected condition.
+
+%kickMotors(): briefly sets the motors to a high duty cycle before returning to modify the duty cycle in a function that calls it. Helps to break the static friction of the gearbox so that the motor can operate at lower duty cycles.
+
+%attemptCenter(): once a line is detected under the reflectance array, kicks the motors before setting them to zero and looping to slowly center the array on the line.
+
+%initAllSensors(): an all-in-one function to initialize the needed sensors that you can run once at the start of your program.
+
+%approachWall(): drives in a straight line until the front ultrasonic sensor reads below a certain value.
+
+%setMotorsToZero(): sets the motors on the robot to 0% duty cycle
+
+%allDark(): checks the reflectance array values to see if all of the values are above the threshold needed to classify as “dark.” Returns true/false.
+
+%turnOffLine(): moves the reflectance array off of a line or bar by turning in place by a certain amount or for a certain time.
+
+%% X. DISCONNECT
+%  Clears the workspace and command window, then
+%  disconnects from the nanobot, freeing up the serial port.
+
+clc
+delete(nb);
+clear('nb');
+clear all
+
+%% EMERGENCY MOTOR SHUT OFF
+% If this section doesn't turn off the motors, turn off the power switch 
+% on your motor carrier board.
+
+% Clear motors
+nb.setMotor(1, 0);
+nb.setMotor(2, 0);
+%% Setup %%
+
+clc
+clear all
+nb = nanobot('/dev/cu.usbmodem101', 115200, 'serial');
+%% TESTS %%
+            tic; % Start the timer
+            while toc < 2.4
+            nb.setMotor(1, 9);
+            nb.setMotor(2, 9);
+            increment=+1;
+            end
+            nb.setMotor(1, 0);
+            nb.setMotor(2, 0);
