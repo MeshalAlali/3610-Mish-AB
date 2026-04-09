@@ -28,10 +28,7 @@
 
 clc
 clear all
-% for PC:
 nb = nanobot('/dev/cu.usbmodem1101', 115200, 'serial');
-% for Mac:
-%nb = nanobot('/dev/cu.usbmodem14301', 115200, 'serial');
 
 %% 2. RECORD WHICH ROBOT YOU'RE USING 
 % From now on (for the final project), your group will use the same robot 
@@ -299,6 +296,15 @@ while (toc < 5)  % Adjust me if you want to stop your line following
         nb.setMotor(2, 0);
         break; % exit the while loop
 
+     if (vals(1) > Black && ...
+            vals(2) > Black && ...
+            vals(3) > Black && ...
+            vals(4) > Black && ...
+            vals(5) > Black && ...
+            vals(6) > Black)
+         break out of this script
+
+
     else
 
         % LINE DETECTED:
@@ -334,5 +340,15 @@ clc
 delete(nb);
 clear('nb');
 clear all
-%%
+%% 1. CONNECT TO YOUR NANOBOT
+%  Remember to replace the first input argument with text corresponding to
+%  the correct serial port you found through the Arduino IDE. Note that the
+%  clc and clear all will clear your command window and all saved
+%  variables!
+
+clc
+clear all
+% for PC:
 nb = nanobot('/dev/cu.usbmodem1101', 115200, 'serial');
+% for Mac:
+%nb = nanobot('/dev/cu.usbmodem14301', 115200, 'serial');

@@ -1,454 +1,465 @@
-%% Setup %%
-% connect robot
+%% ===================== Setup ====================== %%
+
 clc
 clear all
-nb = nanobot('/dev/cu.usbmodem1101', 115200, 'serial');
+nb = nanobot('/dev/cu.usbmodem1101', 115200, 'serial'); % robot
 
-%% PID Loops %%
-% Setup gain variables
-% Initialize integral, previous error, and previous time terms
-% Initialize or perform calculations for targets/values your loop will be working with
-% tic
-% small delay to prevent toc from blowing up derivative term on first loop
+%%
 
-% begin while
-	% calculate dt based on toc and previous time
-	% update previous time
-	% take reading of data
-	% Perform conditional checking whether we want to exit the loop (e.g. read all black on reflectance array during line following)
-		% exit the loop if so, and perform any needed end behaviors (e.g. setting motors to zero)
-	% calculate error term
-	% use error to calculate/update integral and derivative terms
-	% calculate control signal based on error, integral, and derivative
-	% update previous error
-	% calculate desired setpoint quantities from control signal
-	% apply limits to setpoints if needed
-	% apply setpoint to plant (e.g. setting duty cycle for motors)
+myNeuralNetwork = gesture_learn(); % train gesture classifier
 
-% line pid setup
-lineKp = 7; % p gain
-lineKi = 0; % i gain
-lineKd = 0.6; % d gain
+%% =================== Main Loop ==================== %%
+init(); % init sensors
 
-% pid state
-lineIntegral0 = 0; % start i
-linePrevError0 = 0; % start error
-linePrevTime0 = 0; % start time
+% ORDER
+if exist('myNeuralNetwork', 'var')
+    order = gesture_detect(myNeuralNetwork); % classify gesture from wand
+else
+    order = 2; % test mode
+end
 
-% line target
-lineTarget = 0; % line center
-lineMotorBaseSpeed = 9; % base speed
-lineMaxMotor = 12; % motor cap
+switch order
+    case 0
+        % LINE TASK
 
-%% Gesture Classification %%
-% initialize variable to track whether we’ve given valid input
-% define list of possible output values, in the order that the network was trained on
-% while we haven’t given valid input
-	% perform gesture classification as we had done in labs 4 and 5 (outputs index of classified output according to the output value list)
-	% let user know what was gesture was classified as, and ask to verify
-	% perform gesture classification again
-	% check if the first gesture was verified according to the second gesture.
-		% if so, set valid input variable such that we exit the loop on the next iteration
-		% if not, proceed to the next iteration of the loop
+        turn_left();
+        follow_line(); % home
+        spin_find_line(1);
+        follow_line(); % home
 
-%% Line Following %%
-% line follow setup
-lineMinVals = [70,70,70,70,70,70];
-lineMaxVals = [900,900,900,900,900,900];
+        % WALL TASK
 
-lineMOffScale = 1.2; % motor offset
+        straight();
+        follow_line(); % home
+        follow_wall();
+        follow_line(); % home
 
-lineWhiteThresh = 200; % white thresh
-lineBlackThresh = 700; % black thresh
+        % COLOR + HOME
 
-lineRuntime = 99; % run time
+        turn_right();
+        color_sense();
+        follow_line(); % home
+        stop(); % stop
 
-% run line follow
-followLine(nb, lineMinVals, lineMaxVals, lineMOffScale, ...
-    lineKp, lineKi, lineKd, lineIntegral0, linePrevError0, ...
-    linePrevTime0, lineTarget, lineMotorBaseSpeed, ...
-    lineWhiteThresh, lineBlackThresh, lineMaxMotor, lineRuntime);
+    case 1
+        % WALL TASK
 
-%% Wall Following %% 
-%(True distance-maintaining)
-% Set up PID loop
-	% Check for all black condition (made a complete circle)
-	% Calculate error as the difference between the distance you intend to follow and the measured ultrasonic distance
-	% Use prior values of error and/or motor setpoints/encoder rates to determine if the robot is reading a point in front of or behind it, and correct the control signal/motor setpoints accordingly to stabilize.
+        turn_right();
+        follow_line();
+        follow_wall();
+        follow_line(); % home
 
-%OR
+        % LINE TASK
 
-%% (Hacky solution)%% 
-% Move forward while reading sensors
-	% If reflectance is all black, exit loop
-	% if the side ultrasonic reading exceeds a certain value
-		% turn by a specified amount (or turn slowly, reading the ultrasonic until you read a new value greater than or equal to the current exceeded value), then proceed
+        straight();
+        follow_line();
+        spin_find_line(1);
+        follow_line(); % home
 
-% wall follow setup
-wallMOffScale = 1.2; % motor offset
-wallMotorBaseSpeed = 8; % base speed
-wallTurnAdjust = 2; % turn adjust
-wallTurnDuty = 8; % turn speed
-wallMaxMotor = 11; % motor cap
+        % COLOR + HOME
 
-% wall thresholds
-wallBlackThresh = 700; % stop thresh
-frontStopCm = 10; % front stop
-wallNearThresh = 1.5; % near band
-wallFarThresh = 1.5; % far band
-wallRuntime = 60; % run time
+        turn_left();
+        color_sense();
+        follow_line(); % home
+        stop(); % stop
 
-usScale = 0.01615; % us scale
+% --------------------- Testing --------------------- %
+    case 2
+        %test stuff
 
-% run wall follow
-followWallHacky(nb, wallMOffScale, wallMotorBaseSpeed, wallTurnAdjust, ...
-    wallTurnDuty, wallBlackThresh, frontStopCm, wallNearThresh, ...
-    wallFarThresh, wallMaxMotor, usScale, wallRuntime);
+        turn_right();
+end
 
-%% Odometry %% 
-%(Straight-line)
-% Set up PID loop
-	% Using measurements of wheel geometry, calculate the needed encoder counts that each motor needs to go
-	% Define a default speed for the robot to move at
-	% Calculate the error as being the difference between the motor encoder rates (either countspersec or counts divided by a measured dt)
-	% Keep track of the total number of encoder counts for one or both motors and exit the loop and stop the motors once you reach the number of encoder counts needed to travel a certain distance.
-		% Alternatively, you could just drive and continue until another condition is met (e.g. the RGB sensor reads red)
+%% ================= Line Following ================= %%
 
-%(Angular)
-% Set up PID loop
-	% Using measurements of wheel geometry, calculate the needed encoder counts that each motor needs to go
-	% Similarly to the straight line case, we can monitor the encoder counts/rates until we match the needed value, or come within a certain threshold of it.
+function follow_line()
+    nb = get_nb();
+    Kp = 10; 
+    Ki = 0; 
+    Kd = 0.5;
+    integral = 0; % i state
+    prevError = 0; % last error
+    prevTime = 0; % last time
 
-%% Helpers %%
-% line helpers
+    drive(67, 67, 0.03); % wake motors
 
-%followLine(): follows the line using reflectance pid.
-function followLine(nb, minVals, maxVals, mOffScale, kp, ki, kd, ...
-    integral0, prevError0, prevTime0, targetVal, motorBaseSpeed, ...
-    whiteThresh, blackThresh, maxMotor, runtime)
-    % pid state
-    integral = integral0; % i term
-    prevError = prevError0; % last error
-    prevTime = prevTime0; % last time
-
-    % sensor init
-    nb.initReflectance(); % init reflectance
-
-    % motor wake
-    kickMotors(nb, mOffScale, 10, 0.03); % break static friction
-
-    % loop timer
-    tic % start timer
+    tic
     pause(0.03); % avoid tiny dt
 
-    % control loop
-    while toc < runtime
-        dt = toc - prevTime; % step time
-        prevTime = toc; % save time
+    % PID LOOP
+    while toc < 99 % runtime cap
+        dt = toc - prevTime;
+        prevTime = toc;
 
         if dt <= 0
             continue
         end
 
-        vals = readReflectanceVec(nb); % read sensors
+        vals = nb.reflectanceRead();
+        vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
 
-        % state checks
-        if allDark(vals, blackThresh) % stop marker
-            setMotorsToZero(nb);
+        if all_black(vals) || all_white(vals)
+            stop();
             break
         end
 
-        if allLight(vals, whiteThresh) % lost line
-            turnTillLine(nb, prevError, whiteThresh, 8); % find line
-            attemptCenter(nb, mOffScale, whiteThresh, 4); % center line
+        % PID
+        calibrated = (vals - white_thresh()) / (black_thresh() - white_thresh()); % normalize
+        if sum(calibrated) <= 0
             continue
         end
+        error = sum([-3 -2 -1 1 2 3] .* calibrated) / sum(calibrated); % line pos
 
-        % reflectance calc
-        calibratedVals = calibrateReflectance(vals, minVals, maxVals); % scale vals
+        integral = integral + error * dt; % i update
+        derivative = (error - prevError) / dt; % d term
+        control = Kp * error + Ki * integral + Kd * derivative; % pid out
+        prevError = error;
 
-        if sum(calibratedVals) <= 0
-            continue
-        end
+        % STEERING
+        left = 67 + control * 100/max_duty();
+        right = 67 - control * 100/max_duty();
 
-        % pid calc
-        linePos = sum([-3 -2 -1 1 2 3] .* calibratedVals) / sum(calibratedVals); % line pos
-        error = linePos - targetVal; % line error
-        [control, integral, prevError] = pidStep(error, integral, prevError, dt, kp, ki, kd); % pid step
-
-        % motor update
-        m1Duty = -(motorBaseSpeed + control); % left motor
-        m2Duty = mOffScale * (motorBaseSpeed - control); % right motor
-
-        m1Duty = clampVal(m1Duty, -maxMotor, maxMotor); % clamp m1
-        m2Duty = clampVal(m2Duty, -maxMotor, maxMotor); % clamp m2
-
-        nb.setMotor(1, m1Duty); % set m1
-        nb.setMotor(2, m2Duty); % set m2
+        drive(left, right);
     end
 
-    setMotorsToZero(nb); % stop
+    drive(0, 0);
 end
 
-%followWallHacky(): follows wall using simple distance thresholds.
-function followWallHacky(nb, mOffScale, motorBaseSpeed, turnAdjust, ...
-    turnDuty, blackThresh, frontStopCm, nearThresh, ...
-    farThresh, maxMotor, usScale, runtime)
-    % sensor init
-    nb.initReflectance(); % init reflectance
-    nb.initUltrasonic1('D2','D3'); % init front us
-    nb.initUltrasonic2('D4','D5'); % init side us
+%% ---------------- Test Line Follow ---------------- %%
 
-    % wall start
-    kickMotors(nb, mOffScale, 10, 0.03); % break static friction
-    approachWall(nb, frontStopCm, mOffScale, motorBaseSpeed, usScale); % go to wall
+init(); % init sensors
+follow_line(); % test line follow
 
-    turnRight90(nb, turnDuty, 0.42); % face wall path
+%% ================= Wall Following ================= %%
+
+function follow_wall()
+    nb = get_nb();
+    Kp = 20; 
+    Ki = 0; 
+    Kd = 4.5;
+    integral = 0; % i state
+    prevError = 0; % last error
+    prevTime = 0; % last time
+
+    sawAllWhite = false; % state flag
+
+    sideTarget = 8; % wall target
+    cylinderDetect = 7.5; % cylinder detect distance (left sensor)
+
+    % DRIVE TO CYLINDER
+    drive(67, 67, 0.03); % wake motors
+    while true
+        if cm(nb.ultrasonicRead2()) <= cylinderDetect % cylinder in range (left sensor)
+            break
+        end
+        drive(67, 67); % forward
+    end
+    drive(0, 0);
     pause(0.10); % settle
 
-    targetDist = nb.ultrasonicRead2() * usScale; % lock wall distance
+    % TURN RIGHT
+    turn90();
+    pause(0.10); % settle
 
-    % loop state
-    tic % start timer
-    darkReadCount = 0; % reflectance divider
+    drive(67, 67, 0.03); % wake motors
 
-    % wall loop
-    while toc < runtime
-        darkReadCount = darkReadCount + 1; % count loops
+    % WALL LOOP
+    tic
+    pause(0.03); % avoid tiny dt
+    while toc < 60 % runtime cap
+        dt = toc - prevTime;
+        prevTime = toc;
 
-        % stop check
-        if darkReadCount >= 3
-            vals = readReflectanceVec(nb); % read line
+        if dt <= 0
+            continue
+        end
 
-            if allDark(vals, blackThresh) % done marker
-                setMotorsToZero(nb);
+        vals = nb.reflectanceRead();
+        vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
+
+        if ~sawAllWhite
+            if all_white(vals)
+                sawAllWhite = true;
+            end
+        else
+            if some_black(vals)
                 break
             end
-
-            darkReadCount = 0; % reset count
         end
 
-        % distance check
-        sideDist = nb.ultrasonicRead2() * usScale; % side distance
+        sideDistanceRaw = nb.ultrasonicRead1();
+        sideDistance = cm(sideDistanceRaw); % raw to distance
 
-        % motor choose
-        if sideDist > targetDist + farThresh % too far
-            m1Duty = -(motorBaseSpeed - turnAdjust); % pull in
-            m2Duty = mOffScale * (motorBaseSpeed + turnAdjust);
-        elseif sideDist < targetDist - nearThresh % too close
-            m1Duty = -(motorBaseSpeed + turnAdjust); % push out
-            m2Duty = mOffScale * (motorBaseSpeed - turnAdjust);
-        else
-            m1Duty = -motorBaseSpeed; % straight
-            m2Duty = mOffScale * motorBaseSpeed;
-        end
+        error = sideTarget - sideDistance; % side target
+        
+        integral = integral + error * dt; % i update
+        derivative = (error - prevError) / dt; % d term
+        control = Kp * error + Ki * integral + Kd * derivative; % pid out
+        prevError = error;
 
-        m1Duty = clampVal(m1Duty, -maxMotor, maxMotor); % clamp m1
-        m2Duty = clampVal(m2Duty, -maxMotor, maxMotor); % clamp m2
+        left = 67 - control * 100/max_duty();
+        right = 67 + control * 100/max_duty();
 
-        nb.setMotor(1, m1Duty); % set m1
-        nb.setMotor(2, m2Duty); % set m2
+        drive(left, right);
     end
 
-    setMotorsToZero(nb); % stop
+    drive(0, 0);
+
 end
 
-%readReflectanceVec(): reads reflectance values into a vector.
-function vals = readReflectanceVec(nb)
-    vals = nb.reflectanceRead(); % raw read
-    vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six]; % pack vals
-end
+%% ---------------- Test Wall Follow ---------------- %%
 
-%calibrateReflectance(): scales reflectance values to 0 to 1.
-function calibratedVals = calibrateReflectance(vals, minVals, maxVals)
-    % init vals
-    calibratedVals = zeros(1, 6); % init vals
+init(); % init sensors
+follow_wall(); % test wall follow
 
-    % normalize loop
-    for i = 1:6
-        calibratedVals(i) = (vals(i) - minVals(i)) / (maxVals(i) - minVals(i)); % normalize
+%% ================= Color Sensing ================== %%
 
-        if calibratedVals(i) < 0
-            calibratedVals(i) = 0; % floor
-        elseif calibratedVals(i) > 1
-            calibratedVals(i) = 1; % cap
-        end
-    end
-end
+function color_sense()
+    nb = get_nb();
+    pause(0.10); % settle
+    [r, ~, b] = nb.colorRead(); % read color on line
+    drive(0, 0);
 
-%pidStep(): updates pid terms and returns control.
-function [control, integral, prevError] = pidStep(error, integral, prevError, dt, kp, ki, kd)
-    % pid math
-    integral = integral + error * dt; % update i
-    derivative = (error - prevError) / dt; % update d
-    control = kp * error + ki * integral + kd * derivative; % pid out
-    prevError = error; % save error
-end
-
-%turnTillLine(): turns in place (center of mass doesn’t move) until the reflectance sensor reads a  line detected condition.
-function turnTillLine(nb, turnDir, whiteThresh, turnDuty)
-    % search loop
-    while true
-        vals = readReflectanceVec(nb); % read line
-
-        if ~allLight(vals, whiteThresh) % line found
-            break
-        end
-
-        if turnDir >= 0
-            nb.setMotor(1, turnDuty); % turn one way
-            nb.setMotor(2, turnDuty);
-        else
-            nb.setMotor(1, -turnDuty); % turn other way
-            nb.setMotor(2, -turnDuty);
-        end
-    end
-
-    setMotorsToZero(nb); % stop
-end
-
-%kickMotors(): briefly sets the motors to a high duty cycle before returning to modify the duty cycle in a function that calls it. Helps to break the static friction of the gearbox so that the motor can operate at lower duty cycles.
-function kickMotors(nb, mOffScale, kickDuty, kickTime)
-    nb.setMotor(1, -mOffScale * kickDuty); % kick m1
-    nb.setMotor(2, kickDuty); % kick m2
-    pause(kickTime); % hold kick
-end
-
-%attemptCenter(): once a line is detected under the reflectance array, kicks the motors before setting them to zero and looping to slowly center the array on the line.
-function attemptCenter(nb, mOffScale, whiteThresh, turnDuty)
-    % wake motors
-    kickMotors(nb, mOffScale, 10, 0.02); % wake motors
-
-    % center loop
-    while true
-        vals = readReflectanceVec(nb); % read line
-
-        if allLight(vals, whiteThresh) % lost line
-            break
-        end
-
-        % side sum
-        leftSum = vals(1) + vals(2) + vals(3); % left side
-        rightSum = vals(4) + vals(5) + vals(6); % right side
-
-        % trim turn
-        if abs(leftSum - rightSum) < 25 % centered enough
-            break
-        elseif leftSum > rightSum
-            nb.setMotor(1, -turnDuty); % trim left
-            nb.setMotor(2, -turnDuty);
-        else
-            nb.setMotor(1, turnDuty); % trim right
-            nb.setMotor(2, turnDuty);
-        end
-    end
-
-    setMotorsToZero(nb); % stop
-end
-
-%initAllSensors(): an all-in-one function to initialize the needed sensors that you can run once at the start of your program.
-function initAllSensors(nb)
-    nb.initReflectance(); % init reflectance
-    nb.initUltrasonic1('D2','D3'); % init front us
-    nb.initUltrasonic2('D4','D5'); % init side us
-end
-
-%approachWall(): drives in a straight line until the front ultrasonic sensor reads below a certain value.
-function approachWall(nb, frontStopCm, mOffScale, motorBaseSpeed, usScale)
-    % approach loop
-    while true
-        frontDist = nb.ultrasonicRead1() * usScale; % front distance
-
-        if frontDist <= frontStopCm % close enough
-            break
-        end
-
-        nb.setMotor(1, -motorBaseSpeed); % drive forward
-        nb.setMotor(2, mOffScale * motorBaseSpeed);
-    end
-
-    setMotorsToZero(nb); % stop
-end
-
-%turnRight90(): turns right in place for a fixed time.
-function turnRight90(nb, turnDuty, turnTime)
-    nb.setMotor(1, turnDuty); % start turn
-    nb.setMotor(2, turnDuty);
-    pause(turnTime); % hold turn
-    setMotorsToZero(nb); % stop
-end
-
-%One180(): turns in place for a larger fixed turn.
-function One180(nb, turnDir, turnDuty, turnTime)
-    if turnDir >= 0
-        nb.setMotor(1, turnDuty); % turn one way
-        nb.setMotor(2, turnDuty);
+    if r > b
+        turn180_right(); % red -> right 180
     else
-        nb.setMotor(1, -turnDuty); % turn other way
-        nb.setMotor(2, -turnDuty);
+        turn180_left(); % blue -> left 180
     end
-
-    pause(turnTime); % hold turn
-    setMotorsToZero(nb); % stop
 end
 
-%setMotorsToZero(): sets the motors on the robot to 0% duty cycle
-function setMotorsToZero(nb)
-    nb.setMotor(1, 0); % stop m1
-    nb.setMotor(2, 0); % stop m2
+%% --------------- Test Color Sensing --------------- %%
+
+init(); % init sensors
+color_sense(); % test color sense
+
+
+%% ==================== Helpers ===================== %%
+% variables
+function t = white_thresh(), t = 250; end
+function t = black_thresh(), t = 800; end
+function t = max_duty(), t = 12; end   % motor duty scale
+function nb = get_nb(), nb = evalin('base', 'nb'); end
+
+function init()
+    nb = get_nb();
+    nb.initReflectance();
+    nb.initUltrasonic1('D2','D3');
+    nb.initUltrasonic2('D4','D5');
+    nb.initColor();
 end
 
-%allDark(): checks the reflectance array values to see if all of the values are above the threshold needed to classify as “dark.” Returns true/false.
-function tf = allDark(vals, blackThresh)
-    tf = all(vals > blackThresh); % dark check
+
+% reflectance checks
+function r = all_white(vals), r = all(vals < white_thresh()); end
+function r = all_black(vals), r = all(vals > black_thresh()); end
+function r = some_black(vals), r = any(vals > black_thresh()); end
+
+% raw to cm
+function d = cm(raw)
+    d = interp1([0 133 267 400 533 667 800 933 1067 1200 1333 1467 1600 1733 1867 2000], ...
+                [0 2   4   6   8   10  12  14  16   18   20   22   24   26   28   30],...
+                raw, 'linear', 'extrap');
 end
 
-%allLight(): checks if all reflectance values are light.
-function tf = allLight(vals, whiteThresh)
-    tf = all(vals < whiteThresh); % light check
-end
+%% ==================== Movement ==================== %%
 
-%turnOffLine(): moves the reflectance array off of a line or bar by turning in place by a certain amount or for a certain time.
-function turnOffLine(nb, turnDir, turnDuty, turnTime)
-    if turnDir >= 0
-        nb.setMotor(1, turnDuty); % turn one way
-        nb.setMotor(2, turnDuty);
+% ------------------ Motor Drive ------------------- %
+function drive(leftSpeed, rightSpeed, duration)
+    nb = get_nb();
+    leftDuty = leftSpeed / 100 * max_duty(); % speed → duty
+    rightDuty = rightSpeed / 100 * max_duty(); % speed → duty
+
+    if nargin < 4
+        nb.setMotor(1, leftDuty);
+        nb.setMotor(2, rightDuty);
     else
-        nb.setMotor(1, -turnDuty); % turn other way
-        nb.setMotor(2, -turnDuty);
+        nb.setMotor(1, leftDuty);
+        nb.setMotor(2, rightDuty);
+        pause(duration);
+        nb.setMotor(1, 0);
+        nb.setMotor(2, 0);
+    end
+end
+
+% spin until white then black (find line)
+function spin_find_line(direction)
+    nb = get_nb();
+    sawAllWhite = false; % state flag
+
+    nb.initReflectance(); % sensor init
+
+    % TURN LOOP
+    while true
+        vals = nb.reflectanceRead();
+        vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
+
+        if direction >= 0
+            drive(-67, -67); % rotate default direction
+        else
+            drive(67, 67); % rotate opposite direction
+        end
+
+        if ~sawAllWhite
+            if all_white(vals)
+                sawAllWhite = true;
+            end
+        else
+            if some_black(vals)
+                break
+            end
+        end
     end
 
-    pause(turnTime); % hold turn
-    setMotorsToZero(nb); % stop
+    drive(0, 0);
 end
 
-%clampVal(): limits a value to a range.
-function out = clampVal(val, lo, hi)
-    out = min(max(val, lo), hi); % clamp
+%%  Test  %%
+spin_find_line(1)
+
+%% ----------------- Turn 180 Right ----------------- %%
+function turn180_right(), drive(67, -67, 2); end
+%%  Test  %%
+turn180_right()
+
+%% ----------------- Turn 180 Left ------------------ %%
+function turn180_left(), drive(-67, 67, 2); end
+%%  Test  %%
+turn180_left()
+
+%% ----------------- Turn 90 Right ------------------ %%
+function turn90(), drive(67, -75, 1.6); end
+%%  Test  %%
+turn90()
+
+%% ------------------- Turn Right ------------------- %%
+function turn_right(), drive(67, 0, 0.4); end
+%%  Test  %%
+turn_right()
+
+%% ------------------- Turn Left -------------------- %%
+function turn_left(), drive(0, 67, 0.4); end
+%%  Test  %%
+turn_left()
+
+%% -------------------- Straight -------------------- %%
+function straight(), drive(67, 67, 0.4); end
+%%  Test  %%
+straight()
+%% -------------------- Stop -------------------- %%
+function stop(), drive(0, 0); end
+%%  Test  %%
+stop()
+
+%% ==================== Gesture ===================== %%
+
+% TRAIN NETWORK
+function net = gesture_learn()
+    % LOAD DATA
+    [file, path] = uigetfile('10DigitsTrainingSet_MergedData.mat');
+    load(fullfile(path, file));
+
+    % PREPARE FEATURES
+    digitCount = height(data);
+    trialCount = width(data) - 1;
+    TrainingFeatures = zeros(3, 150, 1, digitCount*trialCount);
+    labels = zeros(1, digitCount*trialCount);
+    k = 1;
+    for a = 1:digitCount
+        for b = 1:trialCount
+            TrainingFeatures(:,:,:,k) = data{a,b+1};
+            labels(k) = data{a,1};
+            k = k + 1;
+        end
+    end
+    labels = categorical(labels);
+
+    % SPLIT TRAIN/TEST
+    selection = ones(1, digitCount*trialCount);
+    selectionIndices = [];
+    for b = 1:digitCount
+        selectionIndices = [selectionIndices, round(linspace(1,trialCount,round(trialCount/4))) + (trialCount*(b-1))];
+    end
+    selection(selectionIndices) = 0;
+    xTrain = TrainingFeatures(:,:,:,logical(selection));
+    yTrain = labels(logical(selection));
+    xTest  = TrainingFeatures(:,:,:,~logical(selection));
+    yTest  = labels(~logical(selection));
+
+    % BUILD NETWORK
+    [inputsize1, inputsize2, ~] = size(TrainingFeatures);
+    numClasses = length(unique(labels));
+    learnRate = 0.003;
+    maxEpoch = 40;
+    layers = [
+        imageInputLayer([inputsize1, inputsize2, 1])
+        convolution2dLayer([3,9], 16)
+        batchNormalizationLayer
+        reluLayer
+        convolution2dLayer([1,7], 32)
+        batchNormalizationLayer
+        reluLayer
+        fullyConnectedLayer(64)
+        dropoutLayer(0.20)
+        fullyConnectedLayer(numClasses)
+        softmaxLayer
+        classificationLayer
+    ];
+    options = trainingOptions('sgdm', 'InitialLearnRate', learnRate, ...
+        'MaxEpochs', maxEpoch, 'Shuffle', 'every-epoch', ...
+        'MiniBatchSize', 248, 'ValidationData', {xTest, yTest});
+    net = trainNetwork(xTrain, yTrain, layers, options);
 end
 
-%% X. DISCONNECT
-%  Clears the workspace and command window, then
-%  disconnects from the nanobot, freeing up the serial port.
+%% ================ Classify Gesture ================ %%
 
-% disconnect robot
+function g = gesture_detect(net)
+    wand = nanobot('/dev/cu.usbmodem101', 115200, 'serial'); % connect wand
+
+    numreads = 150;
+    pause(0.5);
+    countdown("Beginning in", 3);
+    disp("Make a Gesture!");
+    wand.ledWrite(1);
+
+    vals = zeros(3, numreads);
+    for i = 1:numreads
+        val = wand.accelRead();
+        vals(1,i) = val.x;
+        vals(2,i) = val.y;
+        vals(3,i) = val.z;
+    end
+    wand.ledWrite(0);
+
+    % CLASSIFY
+    xLive = zeros(3, 150, 1, 1);
+    xLive(:,:,1,1) = vals;
+    pred = classify(net, xLive);
+    g = str2double(char(pred));
+
+    delete(wand); % close wand
+end
+
+%% ------------------ Test Gesture ------------------ %%
+myNeuralNetwork = gesture_learn(); % train gesture classifier
+%%
+gesture_detect(myNeuralNetwork)
+
+%% =================== Disconnect =================== %%
+
 clc
-
 if exist('nb','var')
-    nb.setMotor(1, 0); % stop m1
-    nb.setMotor(2, 0); % stop m2
+    drive(0, 0); % stop motors
     delete(nb); % close robot
     clear('nb'); % clear robot
 end
+clear all
 
-clear all % clear vars
+%% ============ Emergency Motor Shut Off ============ %%
 
-%% EMERGENCY MOTOR SHUT OFF
-% If this section doesn't turn off the motors, turn off the power switch 
-% on your motor carrier board.
+drive(0, 0); % stop motors
 
-% Clear motors
-if exist('nb','var')
-    nb.setMotor(1, 0); % stop m1
-    nb.setMotor(2, 0); % stop m2
-end
+%% ===================== Setup ====================== %%
+
+clc
+clear all
+nb = nanobot('/dev/cu.usbmodem1101', 115200, 'serial'); % robot
