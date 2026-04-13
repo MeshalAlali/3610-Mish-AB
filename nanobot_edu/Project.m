@@ -22,9 +22,10 @@ switch order
     case 0
         % LINE TASK
 
-        turn_left();
+        straight();
+        spin_find_line(0);
         follow_line(); % home
-        spin_find_line(1);
+        spin_find_line(0);
         follow_line(); % home
 
         % WALL TASK
@@ -36,15 +37,17 @@ switch order
 
         % COLOR + HOME
 
-        turn_right();
-        color_sense();
+        straight();
+        spin_find_line(1);
+        spin_find_line(color_sense());
         follow_line(); % home
         stop(); % stop
 
     case 1
         % WALL TASK
 
-        turn_right();
+        straight();
+        spin_find_line(1);
         follow_line();
         follow_wall();
         follow_line(); % home
@@ -53,13 +56,14 @@ switch order
 
         straight();
         follow_line();
-        spin_find_line(1);
+        spin_find_line(0);
         follow_line(); % home
 
         % COLOR + HOME
 
-        turn_left();
-        color_sense();
+        straight();
+        spin_find_line(0);
+        spin_find_line(color_sense())
         follow_line(); % home
         stop(); % stop
 
@@ -76,7 +80,7 @@ function follow_line()
     nb = get_nb();
     Kp = 10; 
     Ki = 0; 
-    Kd = 0.5;
+    Kd = -0.5;
     integral = 0; % i state
     prevError = 0; % last error
     prevTime = 0; % last time
@@ -158,7 +162,8 @@ function follow_wall()
     pause(0.10); % settle
 
     % TURN RIGHT
-    turn90();
+    %turn90();
+    encoder_turn(90);
     pause(0.10); % settle
 
     drive(67, 67, 0.03); % wake motors
@@ -187,8 +192,8 @@ function follow_wall()
             end
         end
 
-        sideDistanceRaw = nb.ultrasonicRead1();
-        sideDistance = cm(sideDistanceRaw); % raw to distance
+        sideDistanceRaw = nb.ultrasonicRead2();
+        sideDistance = cm(sideDistanceRaw); % raw to distance (side sensor)
 
         error = sideTarget - sideDistance; % side target
         
@@ -197,7 +202,7 @@ function follow_wall()
         control = Kp * error + Ki * integral + Kd * derivative; % pid out
         prevError = error;
 
-        left = 67 - control * 100/max_duty();
+        left = 67 - control * 100/max_duty(); %remove control if getting too close
         right = 67 + control * 100/max_duty();
 
         drive(left, right);
@@ -214,15 +219,17 @@ follow_wall(); % test wall follow
 
 %% ================= Color Sensing ================== %%
 
-function color_sense()
+function isRed = color_sense()
     nb = get_nb();
     pause(0.10); % settle
     [r, ~, b] = nb.colorRead(); % read color on line
     drive(0, 0);
 
     if r > b
+        isRed = 1; % red
         turn180_right(); % red -> right 180
     else
+        isRed = 0; % blue
         turn180_left(); % blue -> left 180
     end
 end
@@ -269,7 +276,7 @@ function drive(leftSpeed, rightSpeed, duration)
     leftDuty = leftSpeed / 100 * max_duty(); % speed → duty
     rightDuty = rightSpeed / 100 * max_duty(); % speed → duty
 
-    if nargin < 4
+    if nargin < 3
         nb.setMotor(1, leftDuty);
         nb.setMotor(2, rightDuty);
     else
@@ -293,10 +300,10 @@ function spin_find_line(direction)
         vals = nb.reflectanceRead();
         vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
 
-        if direction >= 0
-            drive(-67, -67); % rotate default direction
+        if direction == 1
+            drive(67, -67); % rotate right (CW)
         else
-            drive(67, 67); % rotate opposite direction
+            drive(-67, 67); % rotate left (CCW)
         end
 
         if ~sawAllWhite
@@ -316,28 +323,94 @@ end
 %%  Test  %%
 spin_find_line(1)
 
+%% ------------------ Encoder-Based Turning ------------------ %%
+
+% ENCODER TURN - pivot in place using encoder counts
+function encoder_turn(angle)
+    nb = get_nb();
+
+    % ROBOT GEOMETRY
+    wheelDiam = 4.2; % wheel diameter in cm
+    wheelBase = 10.0; % distance between wheels in cm
+    countsPerRev = 1440; % encoder counts per wheel revolution
+
+    % COUNTS NEEDED
+    wheelCirc = pi * wheelDiam; % wheel circumference
+    arcLength = abs(angle) / 360 * pi * wheelBase; % arc each wheel travels
+    targetCounts = arcLength / wheelCirc * countsPerRev; % encoder target
+
+    % PID SETUP
+    Kp = 0.15;
+    Kd = 0.02;
+    prevError = 0;
+    totalCounts = 0;
+    minDuty = 40; % keep motors from stalling
+    maxTurnDuty = 80; % cap max speed
+
+    % FLUSH ENCODERS
+    nb.encoderRead(1);
+    nb.encoderRead(2);
+
+    drive(67 * sign(angle), -67 * sign(angle), 0.03); % wake motors
+
+    tic
+    pause(0.03); % avoid tiny dt
+
+    % TURN LOOP
+    while toc < 10 % safety timeout
+        enc = nb.encoderRead(1); % read encoder 1
+        totalCounts = totalCounts + abs(enc.counts); % accumulate
+
+        error = targetCounts - totalCounts; % how far left to go
+
+        if error <= 5 % close enough
+            break
+        end
+
+        derivative = error - prevError; % d term
+        control = Kp * error + Kd * derivative; % pd output
+        prevError = error;
+
+        % CLAMP DUTY
+        duty = max(minDuty, min(maxTurnDuty, abs(control)));
+
+        if angle > 0
+            drive(duty, -duty); % turn right
+        else
+            drive(-duty, duty); % turn left
+        end
+    end
+
+    drive(0, 0);
+end
+
 %% ----------------- Turn 180 Right ----------------- %%
-function turn180_right(), drive(67, -67, 2); end
+function turn180_right(), encoder_turn(180); end
+function turn180_right_timed(), drive(67, -67, 2); end % old manual backup
 %%  Test  %%
 turn180_right()
 
 %% ----------------- Turn 180 Left ------------------ %%
-function turn180_left(), drive(-67, 67, 2); end
+function turn180_left(), encoder_turn(-180); end
+function turn180_left_timed(), drive(-67, 67, 2); end % old manual backup
 %%  Test  %%
 turn180_left()
 
 %% ----------------- Turn 90 Right ------------------ %%
-function turn90(), drive(67, -75, 1.6); end
+function turn90(), encoder_turn(90); end
+function turn90_timed(), drive(67, -75, 1.6); end % old manual backup
 %%  Test  %%
 turn90()
 
 %% ------------------- Turn Right ------------------- %%
-function turn_right(), drive(67, 0, 0.4); end
+function turn_right(), encoder_turn(45); end
+function turn_right_timed(), drive(67, 0, 0.4); end % old manual backup
 %%  Test  %%
 turn_right()
 
 %% ------------------- Turn Left -------------------- %%
-function turn_left(), drive(0, 67, 0.4); end
+function turn_left(), encoder_turn(-45); end
+function turn_left_timed(), drive(0, 67, 0.4); end % old manual backup
 %%  Test  %%
 turn_left()
 
