@@ -302,7 +302,7 @@ while (toc < 5)  % Adjust me if you want to stop your line following
             vals(4) > Black && ...
             vals(5) > Black && ...
             vals(6) > Black)
-         break out of this script
+         break %out of this script
 
 
     else

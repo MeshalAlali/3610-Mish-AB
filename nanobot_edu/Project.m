@@ -3,16 +3,16 @@
 clc
 clear all
 nb = nanobot('/dev/cu.usbmodem1101', 115200, 'serial'); % robot
+useWand = 0;
 
-%%
-
-myNeuralNetwork = gesture_learn(); % train gesture classifier
-
+if useWand
+    myNeuralNetwork = gesture_learn(); % train gesture classifier
+end
 %% =================== Main Loop ==================== %%
 init(); % init sensors
 
 % ORDER
-if exist('myNeuralNetwork', 'var')
+if useWand == 1
     order = gesture_detect(myNeuralNetwork); % classify gesture from wand
 else
     order = 2; % test mode
@@ -41,7 +41,7 @@ switch order
         spin_find_line(1);
         spin_find_line(color_sense());
         follow_line(); % home
-        stop(); % stop
+        stop_driving(); % stop_driving
 
     case 1
         % WALL TASK
@@ -65,7 +65,7 @@ switch order
         spin_find_line(0);
         spin_find_line(color_sense())
         follow_line(); % home
-        stop(); % stop
+        stop_driving(); % stop_driving
 
 % --------------------- Testing --------------------- %
     case 2
@@ -77,15 +77,17 @@ end
 %% ================= Line Following ================= %%
 
 function follow_line()
+
+    minVals = [70,70,70,70,70,70]; % Set me to min reflectance 
+    maxVals = [900,900,900,900,900,900]; % Set me to max reflectance 
+
     nb = get_nb();
-    Kp = 10; 
+    Kp = 8; 
     Ki = 0; 
-    Kd = -0.5;
+    Kd = 0.5;
     integral = 0; % i state
     prevError = 0; % last error
     prevTime = 0; % last time
-
-    drive(67, 67, 0.03); % wake motors
 
     tic
     pause(0.03); % avoid tiny dt
@@ -99,20 +101,32 @@ function follow_line()
             continue
         end
 
-        vals = nb.reflectanceRead();
+        vals = nb.reflectanceRead()
+    
+        % change from a struct to a list for convenience
         vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
+        
+        % Calibrate sensor readings
+        calibratedVals = zeros(1,6); % initialize to zero
+        for i = 1:6
+            calibratedVals(i) = (vals(i) - minVals(i))/(maxVals(i) - minVals(i));
+            % overwrite the calculated calibrated values if get a reading below 
+            % or above our set minVals (white) or maxVals (black), respectively
+            if vals(i) < minVals(i) 
+                calibratedVals(i) = 0;
+            end
+            if vals(i) > maxVals(i) 
+                calibratedVals(i) = maxVals(i);
+            end
+        end
 
         if all_black(vals) || all_white(vals)
-            stop();
+            stop_driving();
             break
         end
 
         % PID
-        calibrated = (vals - white_thresh()) / (black_thresh() - white_thresh()); % normalize
-        if sum(calibrated) <= 0
-            continue
-        end
-        error = sum([-3 -2 -1 1 2 3] .* calibrated) / sum(calibrated); % line pos
+        error = sum([-3 -2 -1 1 2 3] .* calibratedVals) / sum(calibratedVals); % Designing this error term can sometimes be just as 
 
         integral = integral + error * dt; % i update
         derivative = (error - prevError) / dt; % d term
@@ -120,8 +134,8 @@ function follow_line()
         prevError = error;
 
         % STEERING
-        left = 67 + control * 100/max_duty();
-        right = 67 - control * 100/max_duty();
+        left = 8 - control ;
+        right = 8 + control;
 
         drive(left, right);
     end
@@ -133,90 +147,120 @@ end
 
 init(); % init sensors
 follow_line(); % test line follow
+spin_find_line(1);
+follow_line();
 
 %% ================= Wall Following ================= %%
 
 function follow_wall()
     nb = get_nb();
-    Kp = 20; 
+    Kp = 2; 
     Ki = 0; 
-    Kd = 4.5;
+    Kd = 10;
     integral = 0; % i state
     prevError = 0; % last error
     prevTime = 0; % last time
 
     sawAllWhite = false; % state flag
 
-    sideTarget = 8; % wall target
-    cylinderDetect = 7.5; % cylinder detect distance (left sensor)
+    sideTarget = 500; % wall target
+    cylinderDetect = 500; % cylinder detect distance (left sensor)
 
-    % DRIVE TO CYLINDER
-    drive(67, 67, 0.03); % wake motors
-    while true
-        if cm(nb.ultrasonicRead2()) <= cylinderDetect % cylinder in range (left sensor)
-            break
-        end
-        drive(67, 67); % forward
-    end
-    drive(0, 0);
-    pause(0.10); % settle
-
-    % TURN RIGHT
-    %turn90();
-    encoder_turn(90);
-    pause(0.10); % settle
-
-    drive(67, 67, 0.03); % wake motors
+    % % DRIVE TO CYLINDER
+    % drive(9, 9, 0.03); % wake motors
+    % while true
+    %     if cm(nb.ultrasonicRead2()) <= cylinderDetect % cylinder in range (left sensor)
+    %         break
+    %     end
+    %     drive(9, 9); % forward
+    % end
+    % drive(0, 0);
+    % pause(0.10); % settle
+    % 
+    % % TURN RIGHT
+    % %turn90();
+    % turn90_timed();
+    % pause(0.10); % settle
+    % 
+    % drive(9, 9, 0.03); % wake motors
 
     % WALL LOOP
-    tic
-    pause(0.03); % avoid tiny dt
-    while toc < 60 % runtime cap
-        dt = toc - prevTime;
-        prevTime = toc;
+     tic
+     pause(0.03); % avoid tiny dt
+     while toc < 10 % runtime cap
+    %     dt = toc - prevTime;
+    %     prevTime = toc;
+    % 
+    %     if dt <= 0
+    %         continue
+    %     end
+    % 
+    %     % vals = nb.reflectanceRead();
+    %     % vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
+    %     % 
+    %     % if ~sawAllWhite
+    %     %     if all_white(vals)
+    %     %         sawAllWhite = true;
+    %     %     end
+    %     % else
+    %     %     if some_black(vals)
+    %     %         break
+    %     %     end
+    %     % end
+    % 
+    %     sideDistanceRaw = clip(nb.ultrasonicRead2(),0,1000);
+    %     sideDistance = cm(sideDistanceRaw); % raw to distance (side sensor)
+    % 
+    %     error = (sideTarget - sideDistance)/sideTarget ; % side target
+    % 
+    %     integral = integral + error * dt; % i update
+    %     derivative = (error - prevError) / dt; % d term
+    %     control = Kp * error + Ki * integral + Kd * derivative % pid out
 
-        if dt <= 0
-            continue
-        end
+          sideDistanceRaw = clip(nb.ultrasonicRead2(),0,2000);
+          control = clip(interp1([0,500,2000,200],[12,9,9,0],sideDistanceRaw),0,9)
+          leftControl = clip(interp1([0,500],[1,0],sideDistanceRaw),0,9)
 
-        vals = nb.reflectanceRead();
-        vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
+          if control == NaN
+              control = 0;
+          end
+          if leftControl == NaN
+              leftControl = 0;
+          end
+    % 
+    %     prevError = error;
+    %
 
-        if ~sawAllWhite
-            if all_white(vals)
-                sawAllWhite = true;
-            end
-        else
-            if some_black(vals)
-                break
-            end
-        end
-
-        sideDistanceRaw = nb.ultrasonicRead2();
-        sideDistance = cm(sideDistanceRaw); % raw to distance (side sensor)
-
-        error = sideTarget - sideDistance; % side target
-        
-        integral = integral + error * dt; % i update
-        derivative = (error - prevError) / dt; % d term
-        control = Kp * error + Ki * integral + Kd * derivative; % pid out
-        prevError = error;
-
-        left = 67 - control * 100/max_duty(); %remove control if getting too close
-        right = 67 + control * 100/max_duty();
-
-        drive(left, right);
-    end
-
-    drive(0, 0);
-
+          left = 9 + 2; %remove control if getting too close
+          right = 9 + control; 
+          drive(right, left);
+     end
+    % 
+     drive(0, 0);
 end
 
 %% ---------------- Test Wall Follow ---------------- %%
 
+clc
+clear all
+nb = nanobot('/dev/cu.usbmodem1101', 115200, 'serial'); % robot
 init(); % init sensors
+
+
 follow_wall(); % test wall follow
 
+%%
+stop_driving()
+
+%%
+clc
+clear all
+nb = nanobot('/dev/cu.usbmodem1101', 115200, 'serial'); % robot
+
+init();
+while(1)
+    nb.ultrasonicRead2
+end
 %% ================= Color Sensing ================== %%
 
 function isRed = color_sense()
@@ -227,10 +271,8 @@ function isRed = color_sense()
 
     if r > b
         isRed = 1; % red
-        turn180_right(); % red -> right 180
     else
         isRed = 0; % blue
-        turn180_left(); % blue -> left 180
     end
 end
 
@@ -251,7 +293,7 @@ function init()
     nb = get_nb();
     nb.initReflectance();
     nb.initUltrasonic1('D2','D3');
-    nb.initUltrasonic2('D4','D5');
+    nb.initUltrasonic2('D5','D4');
     nb.initColor();
 end
 
@@ -268,25 +310,31 @@ function d = cm(raw)
                 raw, 'linear', 'extrap');
 end
 
+
+
 %% ==================== Movement ==================== %%
 
 % ------------------ Motor Drive ------------------- %
 function drive(leftSpeed, rightSpeed, duration)
     nb = get_nb();
-    leftDuty = leftSpeed / 100 * max_duty(); % speed → duty
-    rightDuty = rightSpeed / 100 * max_duty(); % speed → duty
 
     if nargin < 3
-        nb.setMotor(1, leftDuty);
-        nb.setMotor(2, rightDuty);
+        nb.setMotor(1, leftSpeed);
+        nb.setMotor(2, rightSpeed);
     else
-        nb.setMotor(1, leftDuty);
-        nb.setMotor(2, rightDuty);
+        nb.setMotor(1, leftSpeed);
+        nb.setMotor(2, rightSpeed);
         pause(duration);
         nb.setMotor(1, 0);
         nb.setMotor(2, 0);
     end
 end
+%%
+drive(-10,-10,1)
+
+
+
+%%
 
 % spin until white then black (find line)
 function spin_find_line(direction)
@@ -301,9 +349,9 @@ function spin_find_line(direction)
         vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
 
         if direction == 1
-            drive(67, -67); % rotate right (CW)
+            drive(9, -9); % rotate right (CW)
         else
-            drive(-67, 67); % rotate left (CCW)
+            drive(-9, 9); % rotate left (CCW)
         end
 
         if ~sawAllWhite
@@ -321,7 +369,7 @@ function spin_find_line(direction)
 end
 
 %%  Test  %%
-spin_find_line(1)
+spin_find_line(0)
 
 %% ------------------ Encoder-Based Turning ------------------ %%
 
@@ -339,45 +387,42 @@ function encoder_turn(angle)
     arcLength = abs(angle) / 360 * pi * wheelBase; % arc each wheel travels
     targetCounts = arcLength / wheelCirc * countsPerRev; % encoder target
 
-    % PID SETUP
-    Kp = 0.15;
-    Kd = 0.02;
-    prevError = 0;
-    totalCounts = 0;
-    minDuty = 40; % keep motors from stalling
-    maxTurnDuty = 80; % cap max speed
+    % SPEED - high enough to break static friction in pivot
+    turnSpeed = 12; % max duty for pivot
+    slowSpeed = 10; % slow approach near target
+    slowZone = 0.25; % last 25% of turn slows down
 
-    % FLUSH ENCODERS
+    % FLUSH ENCODERS (drop stale counts)
     nb.encoderRead(1);
     nb.encoderRead(2);
 
-    drive(67 * sign(angle), -67 * sign(angle), 0.03); % wake motors
+    totalCounts = 0;
+
+    % START PIVOT (no duration so motors stay on)
+    if angle > 0
+        drive(turnSpeed, -turnSpeed); % right (CW)
+    else
+        drive(-turnSpeed, turnSpeed); % left (CCW)
+    end
 
     tic
-    pause(0.03); % avoid tiny dt
-
     % TURN LOOP
     while toc < 10 % safety timeout
-        enc = nb.encoderRead(1); % read encoder 1
-        totalCounts = totalCounts + abs(enc.counts); % accumulate
+        enc1 = nb.encoderRead(1);
+        enc2 = nb.encoderRead(2);
+        totalCounts = totalCounts + (abs(enc1.counts) + abs(enc2.counts)) / 2; % avg both wheels
 
-        error = targetCounts - totalCounts; % how far left to go
-
-        if error <= 5 % close enough
+        if totalCounts >= targetCounts % reached target
             break
         end
 
-        derivative = error - prevError; % d term
-        control = Kp * error + Kd * derivative; % pd output
-        prevError = error;
-
-        % CLAMP DUTY
-        duty = max(minDuty, min(maxTurnDuty, abs(control)));
-
-        if angle > 0
-            drive(duty, -duty); % turn right
-        else
-            drive(-duty, duty); % turn left
+        % SLOW DOWN NEAR TARGET to reduce overshoot
+        if totalCounts >= targetCounts * (1 - slowZone)
+            if angle > 0
+                drive(slowSpeed, -slowSpeed);
+            else
+                drive(-slowSpeed, slowSpeed);
+            end
         end
     end
 
@@ -386,42 +431,42 @@ end
 
 %% ----------------- Turn 180 Right ----------------- %%
 function turn180_right(), encoder_turn(180); end
-function turn180_right_timed(), drive(67, -67, 2); end % old manual backup
+function turn180_right_timed(), drive(9, -9, 2); end % old manual backup
 %%  Test  %%
 turn180_right()
 
 %% ----------------- Turn 180 Left ------------------ %%
 function turn180_left(), encoder_turn(-180); end
-function turn180_left_timed(), drive(-67, 67, 2); end % old manual backup
+function turn180_left_timed(), drive(-9, 9, 2); end % old manual backup
 %%  Test  %%
 turn180_left()
 
 %% ----------------- Turn 90 Right ------------------ %%
-function turn90(), encoder_turn(90); end
-function turn90_timed(), drive(67, -75, 1.6); end % old manual backup
+function turn90(), encoder_turn(-90); end
+function turn90_timed(), drive(-12, 10, 0.6); end % old manual backup
 %%  Test  %%
-turn90()
+turn90_timed()
 
 %% ------------------- Turn Right ------------------- %%
 function turn_right(), encoder_turn(45); end
-function turn_right_timed(), drive(67, 0, 0.4); end % old manual backup
+function turn_right_timed(), drive(9, 0, 0.4); end % old manual backup
 %%  Test  %%
 turn_right()
 
 %% ------------------- Turn Left -------------------- %%
 function turn_left(), encoder_turn(-45); end
-function turn_left_timed(), drive(0, 67, 0.4); end % old manual backup
+function turn_left_timed(), drive(0, 9, 0.4); end % old manual backup
 %%  Test  %%
 turn_left()
 
 %% -------------------- Straight -------------------- %%
-function straight(), drive(67, 67, 0.4); end
+function straight(), drive(9, 9, 0.4); end
 %%  Test  %%
 straight()
 %% -------------------- Stop -------------------- %%
-function stop(), drive(0, 0); end
+function stop_driving(), drive(0, 0); end
 %%  Test  %%
-stop()
+stop_driving()
 
 %% ==================== Gesture ===================== %%
 
@@ -514,6 +559,7 @@ end
 
 %% ------------------ Test Gesture ------------------ %%
 myNeuralNetwork = gesture_learn(); % train gesture classifier
+
 %%
 gesture_detect(myNeuralNetwork)
 
@@ -521,7 +567,7 @@ gesture_detect(myNeuralNetwork)
 
 clc
 if exist('nb','var')
-    drive(0, 0); % stop motors
+    stop_driving(); % stop_driving motors
     delete(nb); % close robot
     clear('nb'); % clear robot
 end
@@ -529,7 +575,7 @@ clear all
 
 %% ============ Emergency Motor Shut Off ============ %%
 
-drive(0, 0); % stop motors
+stop_driving(); % stop_driving motors
 
 %% ===================== Setup ====================== %%
 
