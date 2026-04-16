@@ -306,7 +306,7 @@ nb = nanobot('/dev/cu.usbmodem11401', 115200, 'serial'); % robot
 
 init();
 while(1)
-    nb.
+    nb.ultrasonicRead1
 end
 %% ================= Color Sensing ================== %%
 
@@ -349,18 +349,7 @@ follow_line(0);
 color_sense();
 follow_line(0);
 %%
-        vals = nb.reflectanceRead();
-        vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
 
-clc
-clear all
-nb = nanobot('/dev/cu.usbmodem11401', 115200, 'serial'); % robot
-
-init();
-while(1)
-        vals = nb.reflectanceRead();
-        vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six]
-end
 
 %% --------------- Test Color Sensing --------------- %%
 
@@ -370,8 +359,8 @@ color_sense(); % test color sense
 
 %% ==================== Helpers ===================== %%
 % variables
-function t = white_thresh(), t = 100; end
-function t = black_thresh(), t = 400; end
+function t = white_thresh(), t = 250; end
+function t = black_thresh(), t = 80; end
 function t = max_duty(), t = 12; end   % motor duty scale
 function nb = get_nb(), nb = evalin('base', 'nb'); end
 

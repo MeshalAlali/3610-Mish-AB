@@ -12,11 +12,13 @@ clear all
 %%%%%%% 
 % NOTE:  When MATLAB detects the presence of an Arduino, it may ask you 
 % to install some libraries for communicating with it.  You DO NOT need 
-% to install these because everything you need is in nanobot_edu.  (We 
+% to install these because everything you need is in nan
+% obot_edu.  (We 
 % will be using JSON packets to communicate with the Arduino manually.)
 % However, make sure you do have the lastest version of MATLAB installed 
 % (2023a or higher).
 %%%%%%%
+
 
 % First, plug the microUSB cable into the Arduino.
 

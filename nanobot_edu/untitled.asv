@@ -2,7 +2,7 @@
 
 clc
 clear all
-nb = nanobot('/dev/cu.usbmodem11401', 115200, 'serial'); % robot
+nb = nanobot('/dev/cu.usbmodem101', 115200, 'serial'); % robot
 
 %%
 useWand = 0;
@@ -78,15 +78,15 @@ end
 
 %% ================= Line Following ================= %%
 
-function follow_line(wall_detect)
+function follow_line()
 
     minVals = [70,70,70,70,70,70]; % Set me to min reflectance 
     maxVals = [900,900,900,900,900,900]; % Set me to max reflectance 
 
     nb = get_nb();
-    KpL = 3; 
-    KiL = 1; 
-    KdL = 0.1;
+    Kp = 8; 
+    Ki = 0; 
+    Kd = 0.5;
     integral = 0; % i state
     prevError = 0; % last error
     prevTime = 0; % last time
@@ -103,7 +103,7 @@ function follow_line(wall_detect)
             continue
         end
 
-        vals = nb.reflectanceRead();
+        vals = nb.reflectanceRead()
     
         % change from a struct to a list for convenience
         vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
@@ -122,12 +122,6 @@ function follow_line(wall_detect)
             end
         end
 
-        if wall_detect
-               if nb.ultrasonicRead1() <= 500 % cylinder in range (left sensor, raw)
-                   break
-               end
-        end
-
         if all_black(vals) || all_white(vals)
             stop_driving();
             break
@@ -138,12 +132,12 @@ function follow_line(wall_detect)
 
         integral = integral + error * dt; % i update
         derivative = (error - prevError) / dt; % d term
-        control = KpL * error + KiL * integral + KdL * derivative; % pid out
+        control = Kp * error + Ki * integral + Kd * derivative; % pid out
         prevError = error;
 
         % STEERING
-        left = 9 + control ;
-        right = 9 - control;
+        left = 8 + control ;
+        right = 8 - control;
 
         drive(left, right);
     end
@@ -151,28 +145,12 @@ function follow_line(wall_detect)
     drive(0, 0);
 end
 
-%%
-clc
-clear all
-nb = nanobot('/dev/cu.usbmodem11401', 115200, 'serial'); % robot
-
-follow_line(0);
-
-%%
-
-stop_driving()
-
-
 %% ---------------- Test Line Follow ---------------- %%
 
-clc
-clear all
-nb = nanobot('/dev/cu.usbmodem11401', 115200, 'serial'); % robot
 init(); % init sensors
-
-follow_line(0); % test line follow
+follow_line(); % test line follow
 spin_find_line(1);
-follow_line(0);
+follow_line();
 
 %% ================= Wall Following ================= %%
 
@@ -180,61 +158,44 @@ function follow_wall()
     nb = get_nb();
 
 
-    Kp = 0.00475;  % |err| max ~1 -> |control| max ~2
-    Ki = 0.000075;
-    Kd = 0.00005; % D term blows up on noisy ultrasonic + tiny dt
+    Kp = 0.006;  % |err| max ~1 -> |control| max ~2
+    Ki = 0;
+    Kd = 0; % D term blows up on noisy ultrasonic + tiny dt
 
-        vals = nb.reflectanceRead();
-    
-        % change from a struct to a list for convenience
-        vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
-        
 
 
     integral = 0; % i state
     prevError = 0; % last error
     prevTime = 0; % last time
 
-    skipFrontS = 1;
-
     sawAllWhite = false; % state flag
 
-    sideTarget = 300; % wall target (raw units, ~7.5 cm)
-    cylinderDetect = 450; % cylinder detect distance (left sensor)
+    sideTarget = 350; % wall target (raw units, ~7.5 cm)
+    cylinderDetect = 500; % cylinder detect distance (left sensor)
 
-    % DRIVE TO CYLINDER
-    % if (skipFrontS)
-    %     while nb.ultrasonicRead1() >= 550
-    %         drive(9, 9.85);
-    %         pause(0.01)
+    % % DRIVE TO CYLINDER
+    % drive(9, 9, 0.03); % wake motors
+    % while true
+    %     if nb.ultrasonicRead2() <= cylinderDetect % cylinder in range (left sensor, raw)
+    %         break
     %     end
-    %     skipFrontS = 0
+    %     drive(9, 9); % forward
     % end
-    follow_line(1)
-    drive(0, 0);
-    pause(0.10); % settle
-
-    % TURN RIGHT
-    %turn90();
-    turn90();
-    pause(0.10); % settle
-
-    drive(9, 9, 0.03); % wake motors
+    % drive(0, 0);
+    % pause(0.10); % settle
+    % 
+    % % TURN RIGHT
+    % %turn90();
+    % turn90_timed();
+    % pause(0.10); % settle
+    % 
+    % drive(9, 9, 0.03); % wake motors
 
     % WALL LOOP - PID on side distance, drives both motors
      baseSpeed = 9;
      tic
      pause(0.03); % avoid tiny dt
      while toc < 60 % runtime cap
-           temp = some_black(vals)
-                   vals = nb.reflectanceRead();
-    
-        % change from a struct to a list for convenience
-        vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
-          if (temp)
-              break
-          end
-
           dt = toc - prevTime;
           prevTime = toc;
 
@@ -252,114 +213,56 @@ function follow_wall()
           prevError = error;
 
           % STEERING (wall on left: +control = turn toward wall)
-          left = baseSpeed + control*0.9
-          right = baseSpeed - (control*1.1)
+          left = baseSpeed + control
+          right = baseSpeed - control
 
           drive(left, right);
      end
      drive(0, 0);
 end
 
-%%
-
-clc
-clear all
-nb = nanobot('/dev/cu.usbmodem11401', 115200, 'serial'); % robot
-init(); % init sensors
-follow_wall(); % test wall follow
-
-
 %% ---------------- Test Wall Follow ---------------- %%
 
 clc
 clear all
-nb = nanobot('/dev/cu.usbmodem11401', 115200, 'serial'); % robot
+nb = nanobot('/dev/cu.usbmodem101', 115200, 'serial'); % robot
 init(); % init sensors
 
-follow_line(0)
-drive(9,9.75,0.25)
 follow_wall(); % test wall follow
-drive(9,9,0.25);
-spin_find_line(0);
-follow_line(0);
-drive(9,9,0.25)
-follow_line(0)
-%%
-spin_find_line(0);
 
 %%
-
 
 stop_driving()
 
 %%
 clc
 clear all
-nb = nanobot('/dev/cu.usbmodem11401', 115200, 'serial'); % robot
+nb = nanobot('/dev/cu.usbmodem1101', 115200, 'serial'); % robot
 
 drive(10,10,1);
 
 %%
 clc
 clear all
-nb = nanobot('/dev/cu.usbmodem11401', 115200, 'serial'); % robot
+nb = nanobot('/dev/cu.usbmodem1101', 115200, 'serial'); % robot
 
 init();
 while(1)
-    nb.
+    nb.ultrasonicRead2
 end
 %% ================= Color Sensing ================== %%
 
-function color_sense()
+function isRed = color_sense()
     nb = get_nb();
     pause(0.10); % settle
-    nb.initColor();
-
-    %Take a single RGB color sensor reading
-    values = nb.colorRead();
-    
-    %The sensor values are saved as fields in a structure:
-    red = values.red;
-    green = values.green;
-    blue = values.blue;
-
+    [r, ~, b] = nb.colorRead(); % read color on line
     drive(0, 0);
 
-    if red > blue
+    if r > b
         isRed = 1; % red
     else
         isRed = 0; % blue
     end
-
-    if(isRed)
-        drive(-10,10,0.8);
-        spin_find_line(1)
-    else
-        drive(10,-10,0.8);
-        spin_find_line(0)
-    end
-end
-%%
-clc
-clear all
-
-nb = nanobot('/dev/cu.usbmodem11401', 115200, 'serial'); % robot
-init();
-follow_line(0);
-color_sense();
-follow_line(0);
-%%
-        vals = nb.reflectanceRead();
-        vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six];
-
-clc
-clear all
-nb = nanobot('/dev/cu.usbmodem11401', 115200, 'serial'); % robot
-
-init();
-while(1)
-        vals = nb.reflectanceRead();
-        vals = [vals.one, vals.two, vals.three, vals.four, vals.five, vals.six]
 end
 
 %% --------------- Test Color Sensing --------------- %%
@@ -370,8 +273,8 @@ color_sense(); % test color sense
 
 %% ==================== Helpers ===================== %%
 % variables
-function t = white_thresh(), t = 100; end
-function t = black_thresh(), t = 400; end
+function t = white_thresh(), t = 250; end
+function t = black_thresh(), t = 800; end
 function t = max_duty(), t = 12; end   % motor duty scale
 function nb = get_nb(), nb = evalin('base', 'nb'); end
 
@@ -461,7 +364,7 @@ function turn180_left(), drive(-9, 9, 2); end
 turn180_left()
 
 %% ----------------- Turn 90 Right ------------------ %%
-function turn90(), drive(10, -12, 0.55); end
+function turn90(), drive(10, -12, 0.6); end
 %%  Test  %%
 turn90()
 
